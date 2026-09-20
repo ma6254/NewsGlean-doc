@@ -177,7 +177,7 @@ type Item struct {
 | --- | --- | --- | --- | --- | --- |
 | RSS / Atom / JSON Feed | `feed` | 拉取 | 无 | 高（开放标准） | 已实现（v0.1），支持 `http` / `chromedp` / `chromedp_headed` 三种抓取方式 |
 | OPML / 本地文件导入 | `import` | 本地 | 无 | 高 | 计划中 |
-| 网页列表页爬取 | `webpage` | 拉取 | 无（部分站点需 Cookie） | 中（页面改版即失效） | 计划中 |
+| 网页列表页爬取 | `webpage` | 拉取 | 无（部分站点需 Cookie） | 中（页面改版即失效） | 已实现（阶段 10），`goquery` 静态列表页 + CSS 选择器 |
 | 通用 Webhook / HTTP 入站 | `webhook` | 推送 | 自定义共享密钥 | 高 | 计划中 |
 | Telegram 频道 / 群 | `telegram` | 拉取（`getUpdates`）或推送（webhook） | Bot Token | 高（官方 API 稳定） | 计划中 |
 | Telegram 用户会话 | `telegram_user` | 拉取 | 账号登录态 | 低（违反 ToS，有封号风险） | 暂不支持 |
@@ -795,9 +795,10 @@ export:
 
 落地三类新渠道，补齐正文提取与过滤规则。**M1 的「抽象判决」在阶段 14 实测**。
 
-#### 阶段 10 — `webpage` 渠道 `[ ]`
+#### 阶段 10 — `webpage` 渠道 `[x]`
 - `goquery` 解析静态列表页 + CSS 选择器配置
 - 验收：列表页可采
+- 实现：新建 `internal/source/webpage` 包（`webpage.go` + `register.go`），复用 `internal/fetch` 构造 HTTP 客户端。配置 `{url, selector, full_text}`：`selector` 命中「条目锚点或其容器」元素（命中元素非 `<a>` 时取首个后代锚点），标题取锚点文本（折叠连续空白）、链接取 `href` 并按列表页地址解析为绝对（丢弃非 http(s) 与 `#` 锚点链接），`GUID` 回退为绝对链接、`PublishedAt` 置零走核心层抓取时间兜底、`ContentType=text/html`、`full_text` 仅透传留阶段 12。`Validate` 校验 url/selector 非空并用 `cascadia.ParseGroup` 预校验选择器语法（避免 `goquery.Find` 内部 `MustCompile` 在非法选择器上 panic）。游标存「上次最新链接」（JSON `newest_url`），列表按时间倒序、遇到该链接即停止；**不按 `limit` 截断**（截断会让游标漏掉中间未入库条目，核心层三层去重兜底）。实现 `Prober`（抓页面取 `<title>` 供「自动获取」）。`register.go` 注册 `webpage`（Pull=true，extraFlag：`url`/`selector`/`full-text`）；`cmd/root.go` 增加 blank import。依赖 `goquery v1.8.0` + `cascadia v1.3.1`（离线手工 vendor）。样本 `testdata/{list,containers,edge}.html` 覆盖相对链接、容器包裹锚点、无锚点容器跳过、非 http(s) 链接丢弃；`build`/`vet`/`test` 全绿。前端 `SourceForm` 增加 `webpage` 类型与 selector/full_text 字段、`types.ts` 扩展 config 类型
 
 #### 阶段 11 — 内容完整度判定（`ContentStatus`）`[ ]`
 - `source.Item` 增加 `ContentStatus` 五态枚举（`empty`/`summary`/`truncated`/`full`/`unknown`），`feed` 适配器按字段来源赋基准值
@@ -923,7 +924,7 @@ CLI 子命令 + 环境变量 + MySQL + 凭据加密。发布标准：单二进�
 | ID 生成 | `github.com/bwmarrin/snowflake` / `github.com/google/uuid` | 与参考项目一致，按需引用 |
 | 中文编码识别 | `github.com/saintfish/chardet` + `golang.org/x/text` | 与参考项目一致，正好解决 GBK/GB18030 站点问题 |
 | Feed 解析 | 自写解析层（`encoding/xml` + `encoding/json`） | **已确定**：`gofeed` 离线缺包，故自写，覆盖 RSS 2.0 / Atom / JSON Feed 与畸形样本 |
-| 网页爬取 | `net/http` + `goquery`（CSS 选择器） | 只处理静态 HTML（`webpage` 渠道，未实现）；JS 渲染的 feed 页走 chromedp，见下行 |
+| 网页爬取 | `net/http` + `goquery`（CSS 选择器） | 只处理静态 HTML（`webpage` 渠道，已实现于阶段 10）；JS 渲染的 feed 页走 chromedp，见下行 |
 | 无头浏览器 | [chromedp](https://github.com/chromedp/chromedp) v0.9.5 | feed 渠道的 `fetch_mode: chromedp` / `chromedp_headed` 抓取用（JS 渲染页）；通用网页列表页爬取尚未启用 |
 | Telegram | 自写 HTTP 客户端（Bot API） | 只用 `getUpdates` / `setWebhook` / `getChat` 几个接口，引入 SDK 不划算 |
 | QQ 官方机器人 | 待调研（官方 SDK 或自写签名校验） | 需要 WebSocket/回调、签名校验与平台审核，可行性确认后再定 |
