@@ -4,7 +4,7 @@
 
 本文是**设计方案与实现规格**。项目简介、快速开始请看 [README.md](./README.md)。
 
-> **当前进度：M1（v0.1）已完成，阶段 1–6（定时后台调度、礼貌限速 + 健康度自动降频、采集日志可观测性 + SSE 实时刷新进度、阅读状态已读/收藏/归档、FTS5 建表 + 触发器 + 写入同步、中文分词 + 搜索 API）已完成，后续按 21 个执行阶段推进。** 采集契约、`feed` 渠道、数据层、配置、HTTP API、手动采集链路、三层去重、拉取游标持久化均已实现，`build`/`vet`/`test` 全绿。跨渠道指纹去重、渠道健康度计数、「稍后再阅」、Swagger UI、定时后台调度（ticker + 按渠道 interval + 全局并发上限）、礼貌限速与健康度自动降频、采集日志可观测性（fetch_log + 成功率/耗时/最后成功时间 + 界面展示）、SSE 实时刷新进度与阅读状态（已读 / 收藏 / 归档 + 列表过滤）已提前完成；后续按「阶段性开发目标」的 21 个阶段推进，请勿按本文使用未实现的功能。
+> **当前进度：M1（v0.1）已完成，阶段 1–7（定时后台调度、礼貌限速 + 健康度自动降频、采集日志可观测性 + SSE 实时刷新进度、阅读状态已读/收藏/归档、FTS5 建表 + 触发器 + 写入同步、中文分词 + 搜索 API、前端搜索界面）已完成，后续按 21 个执行阶段推进。** 采集契约、`feed` 渠道、数据层、配置、HTTP API、手动采集链路、三层去重、拉取游标持久化均已实现，`build`/`vet`/`test` 全绿。跨渠道指纹去重、渠道健康度计数、「稍后再阅」、Swagger UI、定时后台调度（ticker + 按渠道 interval + 全局并发上限）、礼貌限速与健康度自动降频、采集日志可观测性（fetch_log + 成功率/耗时/最后成功时间 + 界面展示）、SSE 实时刷新进度与阅读状态（已读 / 收藏 / 归档 + 列表过滤）已提前完成；后续按「阶段性开发目标」的 21 个阶段推进，请勿按本文使用未实现的功能。
 > 本文先作为实现规格（spec）使用，实现进度会回写到各章节的勾选标记中。请不要按本文去使用还没有的功能。
 
 ### 文档中的两类内容
@@ -773,9 +773,10 @@ export:
 - [x] 验收：中文关键词命中正文
 - 实现：`internal/database/entry_fts.go` 注册自定义 sqlite 驱动 `sqlite3-bigram`（`ConnectHook` 在每条连接上经 `RegisterFunc` 注册确定性标量函数 `bigram`），`database.Open` 对 sqlite 改用该驱动；触发器/回填写入索引前对 `title`/`summary`/`content`/`author` 统一包 `bigram()`——连续中文串按 `unicode.Han` 切成相邻双字、其余原样保留，再交给默认 unicode61 分词器按空格切词，使每个双字成为独立 token。`installFTS()` 用 `PRAGMA user_version`（`ftsSchemaVersion=1`）标记 tokenization 版本，落后即 `DROP` 旧表重建并回填存量（幂等），触发器每次启动重建；`DB` 增 `driver` 字段，`installFTS()` 仅在 sqlite 下执行。新增 `SearchEntries(q, filter, page, pageSize)`（`internal/database/entry_search.go`）：`JOIN entries_fts` + `MATCH`，查询侧 `ftsQuery()` 用同一 `bigramTokenize` 切词后逐 token 加引号、空格连接（隐式 AND），复用从 `ListEntries` 抽出的 `applyEntryFilter` 叠加渠道/状态过滤，按发布时间倒序分页。接入层 `internal/server/search_api.go` 新增 `GET /api/search`（`q` 必填，`page`/`page_size`/`source_id`/`read`/`favorite`/`archive` 可选），复用 `EntryListResponse` 与 `entryDTOs`；mysql 待阶段 20 以 FULLTEXT + ngram 落地，届时走同一 `SearchEntries` 契约分流
 
-#### 阶段 7 — 前端搜索界面 `[ ]`
-- 搜索框 + 结果列表 + 高亮
-- 验收：搜索到详情可跳转
+#### 阶段 7 — 前端搜索界面 `[x]`
+- [x] 搜索框 + 结果列表 + 命中高亮 + 详情跳转
+- [x] 验收：搜索到详情可跳转
+- 实现：纯前端，改动集中在 `NewsGlean-web`。`src/services/index.ts` 新增 `search(params)`（封装 `GET /api/search`：`q` 必填、trim 后拼接，`page`/`page_size`/`source_id`/`read`/`favorite`/`archive` 可选，复用现有 `request` 与统一错误处理），新增 `SearchParams` 类型（`q: string` + 复用 `EntryListParams` 其余字段），返回值复用 `EntryListResponse`。新建 `pages/Search/index.tsx`：顶部搜索框（受控输入，回车或「搜索」按钮触发，空关键词提示且不发请求），结果列表复用 `EntryRow`（同 `EntryList` 先 `listSources` 拉渠道表显示渠道名；点标题走 `EntryRow` 内置的 `Link to=/entries/{id}` 跳详情，即「搜索到详情可跳转」验收点），分页复用 `EntryList` 的「上一页 / 下一页 + 第 x/y 页」模式与 `PAGE_SIZE`，空态区分「未搜索 / 无结果 / 加载中 / 错误」四种。新增高亮工具（`src/utils/index.ts` 加 `highlight(text, keyword)`）：对 `stripHtml` 后的标题/摘要做不区分大小写的子串匹配，命中片段包 `<mark>`；摘要先 `stripHtml` 再高亮，避免 HTML 标签被切碎；关键词先转义正则特殊字符，空关键词直接返回原文。注意后端按 bigram 双字 token 做 AND 匹配、前端高亮按用户原始连续子串，两者命中范围不完全一致，属可接受差异（在代码注释标注）。可选：结果页叠加渠道/已读/收藏/归档筛选（复用 `EntryList` 的筛选组件与 `source_id`/`read`/`favorite`/`archive` 参数）。`src/router/index.tsx` 注册 `/search` 路由，`src/components/Layout.tsx` 导航栏加「搜索」链接
 
 #### 阶段 8 — 导出 Markdown `[ ]`
 - YAML front matter + 按源/日期分目录
