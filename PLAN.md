@@ -4,7 +4,7 @@
 
 本文是**设计方案与实现规格**。项目简介、快速开始请看 [README.md](./README.md)。
 
-> **当前进度：M1（v0.1）已完成，阶段 1–7（定时后台调度、礼貌限速 + 健康度自动降频、采集日志可观测性 + SSE 实时刷新进度、阅读状态已读/收藏/归档、FTS5 建表 + 触发器 + 写入同步、中文分词 + 搜索 API、前端搜索界面）已完成，后续按 21 个执行阶段推进。** 采集契约、`feed` 渠道、数据层、配置、HTTP API、手动采集链路、三层去重、拉取游标持久化均已实现，`build`/`vet`/`test` 全绿。跨渠道指纹去重、渠道健康度计数、「稍后再阅」、Swagger UI、定时后台调度（ticker + 按渠道 interval + 全局并发上限）、礼貌限速与健康度自动降频、采集日志可观测性（fetch_log + 成功率/耗时/最后成功时间 + 界面展示）、SSE 实时刷新进度与阅读状态（已读 / 收藏 / 归档 + 列表过滤）已提前完成；后续按「阶段性开发目标」的 21 个阶段推进，请勿按本文使用未实现的功能。
+> **当前进度：M1（v0.1）已完成，阶段 1–9（定时后台调度、礼貌限速 + 健康度自动降频、采集日志可观测性 + SSE 实时刷新进度、阅读状态已读/收藏/归档、FTS5 建表 + 触发器 + 写入同步、中文分词 + 搜索 API、前端搜索界面、导出 Markdown、导出 JSON + EPUB）已完成，后续按 21 个执行阶段推进。** 采集契约、`feed` 渠道、数据层、配置、HTTP API、手动采集链路、三层去重、拉取游标持久化均已实现，`build`/`vet`/`test` 全绿。跨渠道指纹去重、渠道健康度计数、「稍后再阅」、Swagger UI、定时后台调度（ticker + 按渠道 interval + 全局并发上限）、礼貌限速与健康度自动降频、采集日志可观测性（fetch_log + 成功率/耗时/最后成功时间 + 界面展示）、SSE 实时刷新进度与阅读状态（已读 / 收藏 / 归档 + 列表过滤）已提前完成；后续按「阶段性开发目标」的 21 个阶段推进，请勿按本文使用未实现的功能。
 > 本文先作为实现规格（spec）使用，实现进度会回写到各章节的勾选标记中。请不要按本文去使用还没有的功能。
 
 ### 文档中的两类内容
@@ -250,15 +250,16 @@ type Item struct {
 
 ### 阅读
 - [~] Web 界面（React + Vite + Tailwind，独立仓库 NewsGlean-web）：列表 / 详情 / 渠道管理 / 稍后再阅 / 收藏 / 归档 / 已读标记与过滤已完成；搜索、快捷键待做
-- [~] REST API `/api`：条目、渠道、手动采集、稍后再阅、已读 / 收藏 / 归档状态、检索、Swagger UI 已完成；导出待做
+- [~] REST API `/api`：条目、渠道、手动采集、稍后再阅、已读 / 收藏 / 归档状态、检索、Swagger UI、Markdown / JSON / EPUB 导出已完成
 - [x] 全文检索（SQLite FTS5 bigram 中文分词 + `/api/search` 已完成，阶段 5–6；MySQL FULLTEXT 待阶段 20）
 - [ ] 实时推送刷新进度（SSE）
 - [ ] 一次性 CLI 子命令（`list` / `read` / `search`）作为 API 的轻客户端
 
 ### 导出与集成
-- [ ] 导出 Markdown（按源/日期分目录，含 YAML front matter）
-- [ ] 导出 JSON（便于喂给其他脚本）
-- [ ] 导出 EPUB（离线整期阅读）
+- [x] 导出 Markdown（按源/日期分目录，含 YAML front matter）
+- [x] 导出 JSON（便于喂给其他脚本）
+- [x] 导出 EPUB（离线整期阅读）
+- [x] 导出下载端点 + 前端导出按钮（`GET /api/export/download?format=markdown|json|epub`，浏览器直接下载；v0.2 联调收尾）
 - [ ] Webhook 通知（新条目推送到自建服务）
 
 ### 智能增强（可选）
@@ -778,13 +779,15 @@ export:
 - [x] 验收：搜索到详情可跳转
 - 实现：纯前端，改动集中在 `NewsGlean-web`。`src/services/index.ts` 新增 `search(params)`（封装 `GET /api/search`：`q` 必填、trim 后拼接，`page`/`page_size`/`source_id`/`read`/`favorite`/`archive` 可选，复用现有 `request` 与统一错误处理），新增 `SearchParams` 类型（`q: string` + 复用 `EntryListParams` 其余字段），返回值复用 `EntryListResponse`。新建 `pages/Search/index.tsx`：顶部搜索框（受控输入，回车或「搜索」按钮触发，空关键词提示且不发请求），结果列表复用 `EntryRow`（同 `EntryList` 先 `listSources` 拉渠道表显示渠道名；点标题走 `EntryRow` 内置的 `Link to=/entries/{id}` 跳详情，即「搜索到详情可跳转」验收点），分页复用 `EntryList` 的「上一页 / 下一页 + 第 x/y 页」模式与 `PAGE_SIZE`，空态区分「未搜索 / 无结果 / 加载中 / 错误」四种。新增高亮工具（`src/utils/index.ts` 加 `highlight(text, keyword)`）：对 `stripHtml` 后的标题/摘要做不区分大小写的子串匹配，命中片段包 `<mark>`；摘要先 `stripHtml` 再高亮，避免 HTML 标签被切碎；关键词先转义正则特殊字符，空关键词直接返回原文。注意后端按 bigram 双字 token 做 AND 匹配、前端高亮按用户原始连续子串，两者命中范围不完全一致，属可接受差异（在代码注释标注）。可选：结果页叠加渠道/已读/收藏/归档筛选（复用 `EntryList` 的筛选组件与 `source_id`/`read`/`favorite`/`archive` 参数）。`src/router/index.tsx` 注册 `/search` 路由，`src/components/Layout.tsx` 导航栏加「搜索」链接
 
-#### 阶段 8 — 导出 Markdown `[ ]`
+#### 阶段 8 — 导出 Markdown `[x]`
 - YAML front matter + 按源/日期分目录
 - 验收：导出结构正确
+- 实现：新建 `internal/export` 包，入口 `ExportMarkdown(db, dir, opts)`（dir 取 `export.markdown_dir`，默认 `./export`）。目录结构 `markdown_dir/<源名>/<YYYY-MM>/<安全化标题>.md`：源名与标题经 `sanitizeName` 清洗 `/\:*?"<>|` 与控制字符、去首尾空格与点，空名兜底 `source-<id>` / `untitled-<id>`；月份取 `published_at` 前 7 位（RFC3339 的 `YYYY-MM` 前缀），空则退 `fetched_at`，再空用 `unknown`。front matter 用已引入的 `yaml.v3` 序列化，字段 `title`/`author`/`url`/`source`/`guid`/`published_at`/`fetched_at`/`content_type`/`tags`/`extra`，空字段 omitempty——无 URL 条目自然不含 `url`，呼应「无 URL 渠道导出 Markdown 不写 url 字段」；`tags` 为 YAML 列表、`extra` 为键值对 map。正文保留原始 HTML 原样写入，`Content` 为空时用 `Summary` 兜底。文件名同目录冲突追加 `-2`/`-3` 序号；条目遍历顺序确定（`source_id` 升序、`published_at` 降序、`id` 降序），故序号分配确定；重复导出覆盖同名文件（快照语义，幂等）。导出范围复用 `EntryFilter`（新增不分页查询 `ListAllEntries`），默认全量，可传 `source_id`/`read`/`favorite`/`archive` 过滤。接入层新增 `POST /api/export/markdown`（过滤参数走 query，复用 `parseEntryFilter`），返回 `{total, sources, dir}`；`route.go` 注册 + Swagger 注解同步。CLI `export` 子命令属阶段 19、JSON/EPUB 属阶段 9，均不在本阶段；本阶段不提前端导出按钮（留到 v0.2 联调）
 
-#### 阶段 9 — 导出 JSON + EPUB（可选）`[ ]`
+#### 阶段 9 — 导出 JSON + EPUB（可选）`[x]`
 - JSON 供脚本消费；EPUB 标准库 `archive/zip` 自写
 - 验收：格式可读、无外部依赖
+- 实现：在 `internal/export` 包扩展两种格式，复用阶段 8 的 `Options{Filter}`/`Result`/`ListAllEntries`/`sanitizeName`/`monthOf`/`parseTags`/`parseExtra`。**JSON**：新增 `ExportJSON(db, dir, opts)`（dir 取 `export.json_dir`，默认 `./export-json`），输出单文件数组 `entries.json`（`json.MarshalIndent` 两空格缩进），条目用导出专用 DTO `EntryJSON`（tags/extra 展开为原生结构、冗余 `source` 渠道显示名，空字段 omitempty——无 URL 条目自然不含 `url`），幂等覆盖。**EPUB**：新增 `ExportEPUB(db, dir, opts)`（dir 取 `export.epub_dir`，默认 `./export-epub`），每源一本 `<安全源名>.epub`（书名=源名，按 `monthOf` 月份分章、章内条目按时间排）。容器用标准库 `archive/zip` 自写、无外部依赖：`mimetype`（首项、`Method=Store` 不压缩）、`META-INF/container.xml`、`OEBPS/content.opf`（metadata/manifest/spine）、`OEBPS/toc.ncx`（EPUB2 兼容）、`OEBPS/nav.xhtml`（EPUB3 导航）、每月一个 `OEBPS/chapter-<YYYY-MM>.xhtml`。正文最小 XHTML 化：void 元素（br/img/hr 等）补自闭合、裸 `&` 转义、文本字段 `xml.EscapeText`，纯文本按 `<p>`/`<br/>` 包裹；属「尽力而为」不做完整良构校验，完整清洗留到阶段 12 正文提取后增强。幂等覆盖。配置 `ExportConfig` 新增 `json_dir`/`epub_dir`（`docs/default.yml` 同步）。接入层新增 `POST /api/export/json`、`POST /api/export/epub`（复用 `parseEntryFilter`），`route.go` 注册 + Swagger 注解同步。CLI `export` 子命令属阶段 19、前端导出按钮留到 v0.2，均不在本阶段
 
 ---
 
