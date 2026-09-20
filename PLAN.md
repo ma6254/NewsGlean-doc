@@ -4,7 +4,7 @@
 
 本文是**设计方案与实现规格**。项目简介、快速开始请看 [README.md](./README.md)。
 
-> **当前进度：M1（v0.1）已完成，阶段 1–5（定时后台调度、礼貌限速 + 健康度自动降频、采集日志可观测性 + SSE 实时刷新进度、阅读状态已读/收藏/归档、FTS5 建表 + 触发器 + 写入同步）已完成，后续按 21 个执行阶段推进。** 采集契约、`feed` 渠道、数据层、配置、HTTP API、手动采集链路、三层去重、拉取游标持久化均已实现，`build`/`vet`/`test` 全绿。跨渠道指纹去重、渠道健康度计数、「稍后再阅」、Swagger UI、定时后台调度（ticker + 按渠道 interval + 全局并发上限）、礼貌限速与健康度自动降频、采集日志可观测性（fetch_log + 成功率/耗时/最后成功时间 + 界面展示）、SSE 实时刷新进度与阅读状态（已读 / 收藏 / 归档 + 列表过滤）已提前完成；后续按「阶段性开发目标」的 21 个阶段推进，请勿按本文使用未实现的功能。
+> **当前进度：M1（v0.1）已完成，阶段 1–6（定时后台调度、礼貌限速 + 健康度自动降频、采集日志可观测性 + SSE 实时刷新进度、阅读状态已读/收藏/归档、FTS5 建表 + 触发器 + 写入同步、中文分词 + 搜索 API）已完成，后续按 21 个执行阶段推进。** 采集契约、`feed` 渠道、数据层、配置、HTTP API、手动采集链路、三层去重、拉取游标持久化均已实现，`build`/`vet`/`test` 全绿。跨渠道指纹去重、渠道健康度计数、「稍后再阅」、Swagger UI、定时后台调度（ticker + 按渠道 interval + 全局并发上限）、礼貌限速与健康度自动降频、采集日志可观测性（fetch_log + 成功率/耗时/最后成功时间 + 界面展示）、SSE 实时刷新进度与阅读状态（已读 / 收藏 / 归档 + 列表过滤）已提前完成；后续按「阶段性开发目标」的 21 个阶段推进，请勿按本文使用未实现的功能。
 > 本文先作为实现规格（spec）使用，实现进度会回写到各章节的勾选标记中。请不要按本文去使用还没有的功能。
 
 ### 文档中的两类内容
@@ -250,8 +250,8 @@ type Item struct {
 
 ### 阅读
 - [~] Web 界面（React + Vite + Tailwind，独立仓库 NewsGlean-web）：列表 / 详情 / 渠道管理 / 稍后再阅 / 收藏 / 归档 / 已读标记与过滤已完成；搜索、快捷键待做
-- [~] REST API `/api`：条目、渠道、手动采集、稍后再阅、已读 / 收藏 / 归档状态、Swagger UI 已完成；检索、导出待做
-- [~] 全文检索（SQLite FTS5 索引与触发器已在 `Install()` 单独落地，阶段 5；中文分词与检索 API 待阶段 6）
+- [~] REST API `/api`：条目、渠道、手动采集、稍后再阅、已读 / 收藏 / 归档状态、检索、Swagger UI 已完成；导出待做
+- [x] 全文检索（SQLite FTS5 bigram 中文分词 + `/api/search` 已完成，阶段 5–6；MySQL FULLTEXT 待阶段 20）
 - [ ] 实时推送刷新进度（SSE）
 - [ ] 一次性 CLI 子命令（`list` / `read` / `search`）作为 API 的轻客户端
 
@@ -768,9 +768,10 @@ export:
 - [x] 验收：索引随条目自动维护
 - 实现：`internal/database/entry_fts.go` 建 `entries_fts` 外部内容表（`content='entries'`、`content_rowid='id'`，rowid 对应 `entries.id`，索引不存正文副本），索引列 `title`/`summary`/`content`/`author`；三个同步触发器 `AFTER INSERT`（写入）/`AFTER DELETE`（删除，回传旧值）/`AFTER UPDATE`（先删旧再插新）；`Install()` 末尾接 `installFTS()`——建表与存量回填仅在表不存在时执行、触发器每次启动重建，保证幂等。条目用 `deleted` 布尔软删，故 `AFTER DELETE` 实际不触发，软删由 `AFTER UPDATE` 的 `new.deleted=1` 分支只删不插、从索引移除；回填按 `deleted=0` 过滤。因 `mattn/go-sqlite3` 的 FTS5 需编译进构建，`build.ps1` 与测试均须加 `-tags sqlite_fts5`
 
-#### 阶段 6 — 中文分词 + 搜索 API `[ ]`
-- bigram 分词 + `/api/search`
-- 验收：中文关键词命中正文
+#### 阶段 6 — 中文分词 + 搜索 API `[x]`
+- [x] bigram 分词 + `/api/search`
+- [x] 验收：中文关键词命中正文
+- 实现：`internal/database/entry_fts.go` 注册自定义 sqlite 驱动 `sqlite3-bigram`（`ConnectHook` 在每条连接上经 `RegisterFunc` 注册确定性标量函数 `bigram`），`database.Open` 对 sqlite 改用该驱动；触发器/回填写入索引前对 `title`/`summary`/`content`/`author` 统一包 `bigram()`——连续中文串按 `unicode.Han` 切成相邻双字、其余原样保留，再交给默认 unicode61 分词器按空格切词，使每个双字成为独立 token。`installFTS()` 用 `PRAGMA user_version`（`ftsSchemaVersion=1`）标记 tokenization 版本，落后即 `DROP` 旧表重建并回填存量（幂等），触发器每次启动重建；`DB` 增 `driver` 字段，`installFTS()` 仅在 sqlite 下执行。新增 `SearchEntries(q, filter, page, pageSize)`（`internal/database/entry_search.go`）：`JOIN entries_fts` + `MATCH`，查询侧 `ftsQuery()` 用同一 `bigramTokenize` 切词后逐 token 加引号、空格连接（隐式 AND），复用从 `ListEntries` 抽出的 `applyEntryFilter` 叠加渠道/状态过滤，按发布时间倒序分页。接入层 `internal/server/search_api.go` 新增 `GET /api/search`（`q` 必填，`page`/`page_size`/`source_id`/`read`/`favorite`/`archive` 可选），复用 `EntryListResponse` 与 `entryDTOs`；mysql 待阶段 20 以 FULLTEXT + ngram 落地，届时走同一 `SearchEntries` 契约分流
 
 #### 阶段 7 — 前端搜索界面 `[ ]`
 - 搜索框 + 结果列表 + 高亮
